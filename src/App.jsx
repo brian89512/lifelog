@@ -291,19 +291,35 @@ export default function App(){
 function LoginBox() {
   const [email, setEmail] = useState("");
   const [pw, setPw] = useState("");
+  const [isSignup, setIsSignup] = useState(false);
+
+  const submit = async () => {
+    if (!email || !pw) return alert("請輸入 Email 與密碼");
+    if (isSignup) {
+      const { data, error } = await supabase.auth.signUp({ email, password: pw });
+      if (error) return alert(error.message);
+      // 若你的 Supabase 有開「Email 確認」，這裡會寄信給你；否則會直接建立帳號
+      alert("註冊成功！如果有開啟信箱驗證，請到信箱點擊確認連結。");
+    } else {
+      const { error } = await supabase.auth.signInWithPassword({ email, password: pw });
+      if (error) return alert(error.message);
+    }
+  };
+
   return (
     <div className="flex items-center gap-2">
       <input className="border rounded-xl px-2 py-1 text-sm" placeholder="Email"
              value={email} onChange={e=>setEmail(e.target.value)} />
       <input className="border rounded-xl px-2 py-1 text-sm" placeholder="Password" type="password"
              value={pw} onChange={e=>setPw(e.target.value)} />
-      <Button onClick={async ()=>{
-        const { error } = await supabase.auth.signInWithPassword({ email, password: pw });
-        if (error) alert(error.message);
-      }}>登入</Button>
+      <Button onClick={submit}>{isSignup ? "註冊" : "登入"}</Button>
+      <button className="text-xs underline" onClick={()=>setIsSignup(s=>!s)}>
+        {isSignup ? "改用登入" : "我要註冊"}
+      </button>
     </div>
   );
 }
+
 
 // ===== Screens（沿用你的 UI） =====
 function TodayScreen({ dayMeta, setDayMeta, entries, addEntry, removeEntry, notes, upsertNote, selectedDate, templates, addTemplate, removeTemplate, showToast }){
@@ -859,22 +875,41 @@ function getOrCreateDay(state, dateStr, setState){
 }
 
 async function updateDayMeta(user, state, setState, newDay){
-  if (!user) { // 本機
+  if (!user) {
+    // 本機模式：照舊
     setState(s=>({ ...s, days: s.days.map(d=>d.id===newDay.id? newDay : d) }));
     return;
   }
-  // 雲端
+
+  // 雲端模式：不要帶 id，交給資料庫生 UUID；用 (user_id, date) 做 upsert
   const payload = {
-    id: newDay.id, user_id: user.id, date: newDay.date,
+    user_id: user.id,
+    date: newDay.date,
     wake_time: newDay.wakeTime ?? null,
     mood: newDay.mood ?? null,
     goal: newDay.goal ?? null,
     review: newDay.review ?? null,
   };
-  const { error } = await supabase.from("days").upsert(payload, { onConflict: "user_id,date" });
-  if (error) return alert(error.message);
-  setState(s=>({ ...s, days: s.days.map(d=>d.id===newDay.id? newDay : d) }));
+
+  const { data, error } = await supabase
+    .from("days")
+    .upsert(payload, { onConflict: "user_id,date" })
+    .select()
+    .single();
+
+  if (error) {
+    alert(error.message);
+    return;
+  }
+
+  // 用資料庫回傳的 UUID 蓋掉本機臨時 id，保持 state 內一致
+  const fixed = { ...newDay, id: data.id };
+  setState(s => ({
+    ...s,
+    days: s.days.map(d => d.date === fixed.date ? fixed : d)
+  }));
 }
+
 
 async function addEntry(user, state, setState, { start, end, granularity, category, noteText }){
   const dateStr = dateFromISO(start);
