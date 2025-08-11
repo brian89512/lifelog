@@ -138,9 +138,14 @@ async function pullFromSupabase(){
 
 // ===== 小元件 =====
 const Card = (p)=> <div className={"rounded-2xl shadow-sm border border-gray-200 bg-white p-4 "+(p.className||"")}>{p.children}</div>;
-const Button = ({ className="", children, ...rest })=> (
-  <button className={"px-3 py-2 rounded-xl border bg-gray-50 hover:bg-gray-100 active:scale-[0.99] transition text-sm "+className} {...rest}>{children}</button>
-);
+const Button = ({ className="", variant="default", children, ...rest }) => {
+  const base = "px-3 py-2 rounded-xl border text-sm transition active:scale-[0.99]";
+  const styles = variant === "primary"
+    ? "bg-black text-white border-black hover:bg-black/90"
+    : "bg-white border-gray-300 hover:bg-gray-100";
+  return <button className={`${base} ${styles} ${className}`} {...rest}>{children}</button>;
+};
+
 const Chip = ({ active=false, children, onClick })=> (
   <button onClick={onClick} className={`text-xs px-2 py-1 rounded-full border ${active?"bg-black text-white":"bg-white hover:bg-gray-100"}`}>{children}</button>
 );
@@ -213,9 +218,9 @@ export default function App(){
         <header className="flex items-center justify-between gap-3 mb-6">
           <h1 className="text-2xl font-semibold tracking-tight">LifeLog</h1>
           <nav className="flex gap-2">
-            <Button className={tab==="today"?"bg-black text-white":""} onClick={()=>setTab("today")}>今日</Button>
-            <Button className={tab==="stats"?"bg-black text-white":""} onClick={()=>setTab("stats")}>統計</Button>
-            <Button className={tab==="calendar"?"bg-black text-white":""} onClick={()=>setTab("calendar")}>月曆</Button>
+            <Button variant={tab==="today"?"primary":"default"} onClick={()=>setTab("today")}>今日</Button>
+            <Button variant={tab==="stats"?"primary":"default"} onClick={()=>setTab("stats")}>統計</Button>
+            <Button variant={tab==="calendar"?"primary":"default"} onClick={()=>setTab("calendar")}>月曆</Button>
           </nav>
 
           {/* 右上角：登入/登出 */}
@@ -264,6 +269,7 @@ export default function App(){
 
         {tab==="calendar" && (
           <CalendarScreen
+            user={user}
             state={state}
             setState={setState}
             selectedDate={selectedDate}
@@ -431,7 +437,7 @@ function StatsScreen({ entriesInRange, rangeKey, setRangeKey }){
   );
 }
 
-function CalendarScreen({ state, setState, selectedDate, setSelectedDate, templates, addTemplate, removeTemplate, showToast }){
+function CalendarScreen({ user, state, setState, selectedDate, setSelectedDate, templates, addTemplate, removeTemplate, showToast }) {
   const base = new Date(`${selectedDate}T00:00:00`);
   const start = startOfMonth(base);
   const end   = endOfMonth(base);
@@ -491,12 +497,12 @@ function CalendarScreen({ state, setState, selectedDate, setSelectedDate, templa
           </div>
         </Card>
 
-        <DayMetaForm dayMeta={drillDayMeta} setDayMeta={(dm)=>updateDayMeta(null, state, setState, dm)}/>
+        <DayMetaForm dayMeta={drillDayMeta} setDayMeta={(dm)=>updateDayMeta(user, state, setState, dm)}/>
         <TimeHierarchy
           dateStr={drillDate}
           dayEntries={drillEntries}
-          addEntry={(e)=>addEntry(null, state, setState, e)}
-          upsertNote={(t)=>upsertNote(null, state, setState, t)}
+          addEntry={(e)=>addEntry(user, state, setState, e)}
+          upsertNote={(t)=>upsertNote(user, state, setState, t)}
           templates={templates}
           addTemplate={addTemplate}
           removeTemplate={removeTemplate}
@@ -518,22 +524,64 @@ function CalendarScreen({ state, setState, selectedDate, setSelectedDate, templa
 
 // ===== Reusable parts =====
 function DayMetaForm({ dayMeta, setDayMeta }){
+  const [draft, setDraft] = useState(dayMeta);
+  const composingRef = useRef(false);
+  const saveTimer = useRef(null);
+
+  // 切換日期時帶入新的初始值
+  useEffect(()=>{ setDraft(dayMeta); }, [dayMeta.id, dayMeta.date]);
+
+  const scheduleSave = (next) => {
+    clearTimeout(saveTimer.current);
+    // 組字中就先不存；結束後或 blur 再存
+    if (composingRef.current) return;
+    saveTimer.current = setTimeout(()=> setDayMeta(next), 400);
+  };
+
+  const onField = (key) => (e) => {
+    const val = e.target.value;
+    const next = { ...draft, [key]: val };
+    setDraft(next);
+    scheduleSave(next);
+  };
+
+  const onBlurSave = () => {
+    clearTimeout(saveTimer.current);
+    setDayMeta(draft);
+  };
+
+  const onCompStart = () => { composingRef.current = true; };
+  const onCompEnd = (key) => (e) => {
+    composingRef.current = false;
+    const val = e.target.value;
+    const next = { ...draft, [key]: val };
+    setDraft(next);
+    // 中文組字完成立刻存
+    setDayMeta(next);
+  };
+
   return (
     <Card>
       <div className="flex items-center justify-between gap-2">
-        <div className="text-lg font-medium">{dayMeta.date}</div>
+        <div className="text-lg font-medium">{draft.date}</div>
         <Button onClick={()=>{
           const now = new Date();
-          setDayMeta({ ...dayMeta, wakeTime: `${pad(now.getHours())}:${pad(now.getMinutes())}` });
+          const next = { ...draft, wakeTime: `${String(now.getHours()).padStart(2,"0")}:${String(now.getMinutes()).padStart(2,"0")}` };
+          setDraft(next);
+          setDayMeta(next); // 點按鈕立即存
         }}>記錄起床時間</Button>
       </div>
-      <div className="mt-3 text-sm text-gray-600">起床時間：{dayMeta.wakeTime ?? "尚未記錄"}</div>
+      <div className="mt-3 text-sm text-gray-600">起床時間：{draft.wakeTime ?? "尚未記錄"}</div>
 
       <div className="mt-4 flex flex-wrap items-center gap-3">
         <div className="font-medium">心情</div>
         <div className="flex gap-1 flex-wrap">
           {MOODS.map(m=> (
-            <Chip key={m} active={dayMeta.mood===m} onClick={()=>setDayMeta({ ...dayMeta, mood:m })}>{m}</Chip>
+            <Chip key={m} active={draft.mood===m} onClick={()=>{
+              const next = { ...draft, mood:m };
+              setDraft(next);
+              setDayMeta(next);
+            }}>{m}</Chip>
           ))}
         </div>
       </div>
@@ -541,16 +589,33 @@ function DayMetaForm({ dayMeta, setDayMeta }){
       <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
         <div>
           <div className="font-medium mb-1">今日目標</div>
-          <input className="w-full border rounded-xl px-3 py-2" value={dayMeta.goal ?? ""} onChange={e=>setDayMeta({ ...dayMeta, goal:e.target.value })} placeholder="今天最想完成的事…"/>
+          <input
+            className="w-full border rounded-xl px-3 py-2"
+            value={draft.goal ?? ""}
+            onChange={onField("goal")}
+            onBlur={onBlurSave}
+            onCompositionStart={onCompStart}
+            onCompositionEnd={onCompEnd("goal")}
+            placeholder="今天最想完成的事…"
+          />
         </div>
         <div>
           <div className="font-medium mb-1">今日評語</div>
-          <input className="w-full border rounded-xl px-3 py-2" value={dayMeta.review ?? ""} onChange={e=>setDayMeta({ ...dayMeta, review:e.target.value })} placeholder="一句話描述今天…"/>
+          <input
+            className="w-full border rounded-xl px-3 py-2"
+            value={draft.review ?? ""}
+            onChange={onField("review")}
+            onBlur={onBlurSave}
+            onCompositionStart={onCompStart}
+            onCompositionEnd={onCompEnd("review")}
+            placeholder="一句話描述今天…"
+          />
         </div>
       </div>
     </Card>
   );
 }
+
 
 function MiniPie({ entries }){
   const data = useMemo(()=>{
@@ -749,7 +814,7 @@ function QuickAddButton({ slotLabel, startISO, endISO, granularity, addEntry, up
             <button className="text-xs underline" onClick={()=>{ if(note.trim()) addTemplate(cat, note.trim()); }}>將此內容存為常用</button>
             <div className="flex gap-2">
               <Button onClick={()=>setOpen(false)}>取消</Button>
-              <Button className="bg-black text-white" onClick={()=>{
+              <Button variant="primary" onClick={()=>{
                 addEntry({ start:startISO, end:endISO, granularity, category:cat, noteText: note || undefined });
                 if (note.trim()) upsertNote(note.trim());
                 setNote(""); setOpen(false); onSuccess && onSuccess();
